@@ -17,7 +17,7 @@ require('dotenv').config();
 
 const token = process.env.BOT_TOKEN;
 
-// Majburiy kanallar ro'yxati (Boshlang'ich qiymat .env yoki default)
+// Majburiy kanallar ro'yxati
 let REQUIRED_CHANNELS = process.env.REQUIRED_CHANNEL 
     ? [process.env.REQUIRED_CHANNEL] 
     : ['@astrax_tv'];
@@ -79,7 +79,7 @@ const inlineCategoriesMenu = {
     parse_mode: 'HTML'
 };
 
-// Admin Menyusi (Kanallarni boshqarish tugmasi qo'shildi)
+// Admin Menyusi
 const adminMenuKeyboard = {
     reply_markup: {
         inline_keyboard: [
@@ -100,9 +100,9 @@ function isAdmin(userId) {
     return ADMIN_IDS.includes(userId.toString());
 }
 
-// Majburiy obunani tekshirish (Barcha kanallar uchun)
+// Majburiy obunani tekshirish
 async function checkSubscription(chatId, userId) {
-    if (isAdmin(userId)) return true; // Admin bo'lsa tekshirmaydi
+    if (isAdmin(userId)) return true;
     if (REQUIRED_CHANNELS.length === 0) return true;
 
     for (const channel of REQUIRED_CHANNELS) {
@@ -242,7 +242,7 @@ bot.on('callback_query', async (query) => {
 
     try { await bot.answerCallbackQuery(query.id); } catch (e) {}
 
-    // Obuna tekshiruvi tugmasi
+    // Obuna tekshiruvi
     if (data === 'check_sub') {
         const isSubscribed = await checkSubscription(chatId, userId);
         if (isSubscribed) {
@@ -307,7 +307,6 @@ bot.on('callback_query', async (query) => {
             return await bot.sendMessage(chatId, "✅ Kontent bazadan o'chirib tashlandi!");
         }
 
-        // --- MAJBURIY KANALLARNI BOSHQARISH ---
         if (data === 'admin_manage_channels') {
             let channelText = "📢 <b>Hozirgi Majburiy Kanallar:</b>\n\n";
             if (REQUIRED_CHANNELS.length === 0) {
@@ -406,7 +405,6 @@ bot.on('message', async (msg) => {
 
     // --- ADMIN BUYRUQLARI ---
     if (isAdmin(userId) && userState[chatId]) {
-        // Yangi Kanal Qo'shish
         if (userState[chatId].step === 'WAITING_NEW_CHANNEL') {
             let chName = text.trim();
             if (!chName.startsWith('@')) chName = '@' + chName;
@@ -414,7 +412,7 @@ bot.on('message', async (msg) => {
             if (!REQUIRED_CHANNELS.includes(chName)) {
                 REQUIRED_CHANNELS.push(chName);
                 userState[chatId] = null;
-                return await bot.sendMessage(chatId, `✅ <b>${chName}</b> majburiy kanallar ro'yxatiga qo'shildi!\n\n<i>Eslatib o'tamiz, bot o'sha kanalda admin bo'lishi shart.</i>`, { parse_mode: 'HTML' });
+                return await bot.sendMessage(chatId, `✅ <b>${chName}</b> majburiy kanallar ro'yxatiga qo'shildi!`, { parse_mode: 'HTML' });
             } else {
                 userState[chatId] = null;
                 return await bot.sendMessage(chatId, "⚠️ Ushbu kanal allaqachon ro'yxatda bor.");
@@ -433,13 +431,14 @@ bot.on('message', async (msg) => {
             }
         }
 
+        // Kontent Qo'shish va Kanalga Avto-Post Yuborish
         if (userState[chatId].step === 'WAITING_CONTENT_DATA') {
             const parts = text.split('|').map(p => p.trim());
             if (parts.length >= 4) {
                 const [title, code, type, posterFileId, videoIdsStr, description] = parts;
                 const episodes = videoIdsStr ? videoIdsStr.split(',').map(v => v.trim()) : [];
 
-                contentData.push({
+                const newItem = {
                     id: Date.now().toString(),
                     title,
                     code,
@@ -447,10 +446,49 @@ bot.on('message', async (msg) => {
                     posterFileId: posterFileId || '',
                     episodes: episodes,
                     description: description || ''
-                });
+                };
 
+                contentData.push(newItem);
                 userState[chatId] = null;
-                return await bot.sendMessage(chatId, `✅ <b>${title}</b> (${type}) muvaffaqiyatli qo'shildi!\nKodi: <code>${code}</code>`, { parse_mode: 'HTML' });
+
+                await bot.sendMessage(chatId, `✅ <b>${title}</b> (${type}) muvaffaqiyatli bazaga qo'shildi!\nKodi: <code>${code}</code>`, { parse_mode: 'HTML' });
+
+                // KANALGA AUTOMATIK POST YUBORISH
+                const primaryChannel = REQUIRED_CHANNELS[0] || '@astrax_tv';
+                
+                let channelPostText = `🔥 <b>Yangi ${type} joylandi!</b>\n\n` +
+                    `🎬 <b>Nomi:</b> ${title}\n` +
+                    `🆔 <b>Kodi:</b> <code>${code}</code>\n`;
+                
+                if (description) {
+                    channelPostText += `\n💬 ${description}\n`;
+                }
+
+                const me = await bot.getMe();
+                channelPostText += `\n🤖 <b>Tomosha qilish uchun botimiz:</b> @${me.username}`;
+
+                const channelOptions = {
+                    caption: channelPostText,
+                    parse_mode: 'HTML',
+                    reply_markup: {
+                        inline_keyboard: [
+                            [{ text: "▶️ Botda tomosha qilish", url: `https://t.me/${me.username}?start=${code}` }]
+                        ]
+                    }
+                };
+
+                try {
+                    if (posterFileId) {
+                        await bot.sendPhoto(primaryChannel, posterFileId, channelOptions);
+                    } else {
+                        await bot.sendMessage(primaryChannel, channelPostText, channelOptions);
+                    }
+                } catch (err) {
+                    console.error("Kanalga post yuborishda xatolik:", err.message);
+                    await bot.sendMessage(chatId, "⚠️ Kontent qo'shildi, lekin kanalga avto-post yuborib bo'lmadi. Bot kanalda admin ekanligini tekshiring.");
+                }
+
+                return;
             } else {
                 return await bot.sendMessage(chatId, "❌ Noto'g'ri format! Format:\n<code>Nomi | Kodi | Turi | Poster_File_ID | Video_File_IDs | Tavsif</code>", { parse_mode: 'HTML' });
             }
